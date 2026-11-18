@@ -58,7 +58,7 @@ object DataEngine {
 
     private fun national(ctx: Context, m: DetectedMatch, force: Boolean): BundleState {
         val f = Http.get(ctx, INTL_URL, 12 * HOUR, force)
-            ?: return BundleState.Failed("Milli maç verisi indirilemedi. İnternet bağlantını kontrol et.")
+            ?: return BundleState.Failed("Milli maç verisi indirilemedi. İnternet bağlantını kontrol et.\nAyrıntı: " + Http.lastError)
         val all = Csv.international(f.text).sortedByDescending { it.date }
         val names = HashSet<String>()
         all.forEach { names.add(it.home); names.add(it.away) }
@@ -101,7 +101,7 @@ object DataEngine {
 
     private suspend fun season(ctx: Context, lg: League, season: String, force: Boolean, maxAge: Long):
         Pair<Http.Fetched?, List<MatchRecord>> = withContext(Dispatchers.IO) {
-        val url = "https://football-data.co.uk/mmz4281/$season/${lg.code}.csv"
+        val url = "https://www.football-data.co.uk/mmz4281/$season/${lg.code}.csv"
         val f = Http.get(ctx, url, maxAge, force)
         if (f == null) Pair(null, emptyList()) else Pair(f, Csv.footballData(f.text, lg.name))
     }
@@ -121,10 +121,13 @@ object DataEngine {
         val cur = seasonCode(0)
         val fetchTimes = ArrayList<Long>()
 
-        val curFiles = leagues.map { lg -> async { lg to season(ctx, lg, cur, force, 6 * HOUR) } }.awaitAll()
+        val curFiles = ArrayList<Pair<League, Pair<Http.Fetched?, List<MatchRecord>>>>()
+        for (chunk in leagues.chunked(4)) {
+            curFiles.addAll(chunk.map { lg -> async { lg to season(ctx, lg, cur, force, 6 * HOUR) } }.awaitAll())
+        }
         curFiles.forEach { it.second.first?.let { f -> fetchTimes.add(f.fetchedAt) } }
         if (curFiles.all { it.second.first == null }) {
-            return@coroutineScope BundleState.Failed("Kulüp verisi indirilemedi. İnternet bağlantını kontrol et.")
+            return@coroutineScope BundleState.Failed("Kulüp verisi indirilemedi. İnternet bağlantını kontrol et.\nAyrıntı: " + Http.lastError)
         }
 
         var per = curFiles.map { it.first to it.second.second }
