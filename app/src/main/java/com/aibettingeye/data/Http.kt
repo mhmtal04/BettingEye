@@ -15,6 +15,8 @@ object Http {
     private const val UA =
         "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"
 
+    private fun isFd(u: String) = try { URL(u).host.endsWith("football-data.co.uk") } catch (e: Exception) { false }
+
     fun get(ctx: Context, url: String, maxAgeMs: Long, force: Boolean = false): Fetched? {
         val dir = File(ctx.filesDir, "cache")
         dir.mkdirs()
@@ -23,9 +25,27 @@ object Http {
         if (!force && f.exists() && now - f.lastModified() < maxAgeMs) {
             return Fetched(f.readText(), f.lastModified(), true)
         }
+
+        // football-data.co.uk sunucusunun HTTPS sertifika zinciri eksik olabiliyor (Android reddeder).
+        // Yalnızca bu alan adı için, herkese açık CSV dosyaları adına HTTP yedeği denenir.
+        val candidates = mutableListOf(url)
+        if (url.startsWith("https://") && isFd(url)) candidates.add("http://" + url.removePrefix("https://"))
+
+        for (cand in candidates) {
+            val t = download(cand)
+            if (t != null) {
+                f.writeText(t)
+                return Fetched(t, System.currentTimeMillis(), false)
+            }
+        }
+        if (f.exists()) return Fetched(f.readText(), f.lastModified(), true)
+        return null
+    }
+
+    private fun download(start: String): String? {
         try {
-            var u = url
-            for (hop in 0 until 5) {
+            var u = start
+            for (hop in 0 until 6) {
                 val c = URL(u).openConnection() as HttpURLConnection
                 c.instanceFollowRedirects = false
                 c.connectTimeout = 20000
@@ -37,28 +57,31 @@ object Http {
                 if (code in 301..308) {
                     val loc = c.getHeaderField("Location")
                     c.disconnect()
-                    if (loc == null) { lastError = "HTTP $code, yönlendirme adresi yok"; break }
-                    u = URL(URL(u), loc).toString()
+                    if (loc == null) { lastError = "HTTP $code, yönlendirme adresi yok"; return null }
+                    var next = URL(URL(u), loc).toString()
+                    if (start.startsWith("http://") && next.startsWith("https://") && isFd(next)) {
+                        next = "http://" + next.removePrefix("https://")
+                    }
+                    u = next
                     continue
                 }
                 if (code == 200) {
                     val t = c.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
                     c.disconnect()
                     if (t.contains("<html", ignoreCase = true)) {
-                        lastError = "CSV yerine web sayfası döndü (" + url.substringAfterLast('/') + ")"
-                        break
+                        lastError = "CSV yerine web sayfası döndü (" + start.substringAfterLast('/') + ")"
+                        return null
                     }
-                    f.writeText(t)
-                    return Fetched(t, System.currentTimeMillis(), false)
+                    return t
                 }
-                lastError = "HTTP $code (" + url.substringAfterLast('/') + ")"
+                lastError = "HTTP $code (" + start.substringAfterLast('/') + ")"
                 c.disconnect()
-                break
+                return null
             }
+            lastError = "Çok fazla yönlendirme (" + start.substringAfterLast('/') + ")"
         } catch (e: Exception) {
             lastError = e.javaClass.simpleName + ": " + (e.message ?: "")
         }
-        if (f.exists()) return Fetched(f.readText(), f.lastModified(), true)
         return null
     }
 }
