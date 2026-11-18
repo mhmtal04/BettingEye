@@ -69,7 +69,20 @@ object Store {
     }
 
     fun add(m: DetectedMatch) {
-        val list = (listOf(m) + ObserverState.history.value.filterNot { it.key == m.key }).take(50)
+        save((listOf(m) + ObserverState.history.value.filterNot { it.key == m.key }).take(50))
+    }
+
+    fun remove(m: DetectedMatch) {
+        if (ObserverState.detected.value?.key == m.key) ObserverState.detected.value = null
+        save(ObserverState.history.value.filterNot { it.key == m.key })
+    }
+
+    fun clearAll() {
+        ObserverState.detected.value = null
+        save(emptyList())
+    }
+
+    private fun save(list: List<DetectedMatch>) {
         ObserverState.history.value = list
         val a = JSONArray()
         list.forEach {
