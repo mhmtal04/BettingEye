@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -27,6 +28,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -432,18 +434,46 @@ private fun H2hPanel(b: DataBundle) {
 @Composable
 private fun HistoryTab() {
     val list by ObserverState.history.collectAsState()
+    var confirmAll by remember { mutableStateOf(false) }
+
     Heading("Geçmiş")
     if (list.isEmpty()) {
         Panel { Dim("Algıladığın veya girdiğin maçlar burada saklanır. Henüz kayıt yok.") }
     } else {
-        Dim("Algılanan maçlar. Analiz için dokun.")
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically) {
+            Dim("${list.size} maç. Analiz için dokun.")
+            TextButton(onClick = { confirmAll = true }) { Text("Tümünü sil", color = Palette.Warn) }
+        }
         list.forEach { m ->
             Panel(Modifier.clickable { ObserverState.selected.value = m }) {
-                Text("${m.home} - ${m.away}", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = Palette.Text)
-                val s = summary(m)
-                if (s.isNotEmpty()) Dim(s)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("${m.home} - ${m.away}", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = Palette.Text)
+                        val s = summary(m)
+                        if (s.isNotEmpty()) Dim(s)
+                    }
+                    TextButton(onClick = { Store.remove(m) }) { Text("Sil", color = Palette.Warn) }
+                }
             }
         }
+    }
+
+    if (confirmAll) {
+        AlertDialog(
+            onDismissRequest = { confirmAll = false },
+            confirmButton = {
+                TextButton(onClick = { Store.clearAll(); confirmAll = false }) {
+                    Text("Sil", color = Palette.Warn)
+                }
+            },
+            dismissButton = { TextButton(onClick = { confirmAll = false }) { Text("Vazgeç") } },
+            title = { Text("Geçmiş silinsin mi?") },
+            text = { Text("Kayıtlı ${list.size} maç silinecek. Bu işlem geri alınamaz.") },
+            containerColor = Palette.Panel,
+            titleContentColor = Palette.Text,
+            textContentColor = Palette.TextDim
+        )
     }
 }
 
@@ -461,7 +491,7 @@ private fun SettingsTab() {
     Heading("Ayarlar")
     Panel {
         Label("Sürüm")
-        Text("0.3.0, aşama 3: veri toplama", color = Palette.Text, fontSize = 14.sp)
+        Text("0.3.1, aşama 3: veri toplama", color = Palette.Text, fontSize = 14.sp)
     }
     Panel {
         Label("Gözlemci tanılama")
