@@ -17,21 +17,42 @@ object DataEngine {
     private const val INTL_URL = "https://raw.githubusercontent.com/martj42/international_results/master/results.csv"
     private const val HOUR = 3600_000L
 
-    private data class League(val code: String, val name: String)
-
-    private val leagues = listOf(
-        League("T1", "Türkiye Süper Lig"), League("E0", "İngiltere Premier Lig"),
-        League("E1", "İngiltere Championship"), League("SP1", "İspanya La Liga"),
-        League("D1", "Almanya Bundesliga"), League("I1", "İtalya Serie A"),
-        League("F1", "Fransa Ligue 1"), League("N1", "Hollanda Eredivisie"),
-        League("P1", "Portekiz Liga"), League("B1", "Belçika Pro Lig"),
-        League("G1", "Yunanistan Süper Lig"), League("SC0", "İskoçya Premiership")
+    private data class League(
+        val code: String,
+        val name: String,
+        val dir: String? = null,
+        val files: List<String> = emptyList(),
+        val json: Boolean = true
     )
 
-    private fun seasonCode(offset: Int): String {
+    /** openfootball/football.json dosya kodları */
+    private val leagues = listOf(
+        League("en.1", "İngiltere Premier Lig"), League("en.2", "İngiltere Championship"),
+        League("en.3", "İngiltere League One"), League("en.4", "İngiltere League Two"),
+        League("de.1", "Almanya Bundesliga"), League("de.2", "Almanya 2. Bundesliga"),
+        League("es.1", "İspanya La Liga"), League("es.2", "İspanya Segunda"),
+        League("it.1", "İtalya Serie A"), League("it.2", "İtalya Serie B"),
+        League("fr.1", "Fransa Ligue 1"), League("fr.2", "Fransa Ligue 2"),
+        League("nl.1", "Hollanda Eredivisie"), League("pt.1", "Portekiz Liga"),
+        League("tr.1", "Türkiye Süper Lig", dir = "turkey", files = listOf("1-superlig.txt")),
+        League("tr.2", "Türkiye 1. Lig", dir = "turkey", files = listOf("2-lig1.txt"), json = false), League("be.1", "Belçika Pro Lig"),
+        League("sco.1", "İskoçya Premiership"), League("gr.1", "Yunanistan Süper Lig"),
+        League("at.1", "Avusturya Bundesliga")
+    )
+
+    private fun seasonLabel(offset: Int): String {
         val now = LocalDate.now()
         val start = (if (now.monthValue >= 7) now.year else now.year - 1) - offset
-        return "%02d%02d".format(start % 100, (start + 1) % 100)
+        return "%d-%02d".format(start, (start + 1) % 100)
+    }
+
+    private fun blockedHint(title: String, err: String): String {
+        val blocked = err.contains("CertPath") || err.contains("Trust anchor") || err.contains("web sayfası")
+        return if (blocked) {
+            title + "\nBu veri kaynağına şu ağdan erişilemiyor. Sertifika hatası veya sayfa yönlendirmesi, operatör ya da ağ tarafında erişim engeli olabileceğini gösterir. İnternetin çalışıyor, sorun kaynağa erişimde.\nAyrıntı: " + err
+        } else {
+            title + " İnternet bağlantını kontrol et.\nAyrıntı: " + err
+        }
     }
 
     suspend fun run(ctx: Context, m: DetectedMatch, force: Boolean) {
@@ -101,9 +122,25 @@ object DataEngine {
 
     private suspend fun season(ctx: Context, lg: League, season: String, force: Boolean, maxAge: Long):
         Pair<Http.Fetched?, List<MatchRecord>> = withContext(Dispatchers.IO) {
-        val url = "https://www.football-data.co.uk/mmz4281/$season/${lg.code}.csv"
-        val f = Http.get(ctx, url, maxAge, force)
-        if (f == null) Pair(null, emptyList()) else Pair(f, Csv.footballData(f.text, lg.name))
+        var fetched: Http.Fetched? = null
+        var recs: List<MatchRecord> = emptyList()
+        if (lg.dir != null) {
+            // openfootball/europe (Football.TXT)
+            val startYear = season.take(4).toIntOrNull() ?: LocalDate.now().year
+            for (file in lg.files) {
+                val f = Http.get(ctx, "https://raw.githubusercontent.com/openfootball/europe/master/${lg.dir}/$season/$file", maxAge, force)
+                if (f != null) {
+                    val r = Csv.footballTxt(f.text, lg.name, startYear)
+                    if (r.isNotEmpty()) { fetched = f; recs = r; break }
+                }
+            }
+        }
+        if (recs.isEmpty() && lg.json) {
+            // openfootball/football.json
+            val f = Http.get(ctx, "https://raw.githubusercontent.com/openfootball/football.json/master/$season/${lg.code}.json", maxAge, force)
+            if (f != null) { fetched = f; recs = Csv.footballJson(f.text, lg.name) }
+        }
+        Pair(fetched, recs)
     }
 
     private fun findTeam(input: String, per: List<Pair<League, List<MatchRecord>>>): Hit? {
@@ -117,49 +154,62 @@ object DataEngine {
         return best
     }
 
-    private suspend fun clubs(ctx: Context, m: DetectedMatch, force: Boolean): BundleState = coroutineScope {
-        val cur = seasonCode(0)
-        val fetchTimes = ArrayList<Long>()
+    private suspend fun loadAll(ctx: Context, season: String, force: Boolean, maxAge: Long):
+        List<Pair<League, Pair<Http.Fetched?, List<MatchRecord>>>> = coroutineScope {
+        val out = ArrayList<Pair<League, Pair<Http.Fetched?, List<MatchRecord>>>>()
+        for (chunk in leagues.chunked(5)) {
+            out.addAll(chunk.map { lg -> async { lg to season(ctx, lg, season, force, maxAge) } }.awaitAll())
+        }
+        out
+    }
 
-        val curFiles = ArrayList<Pair<League, Pair<Http.Fetched?, List<MatchRecord>>>>()
-        for (chunk in leagues.chunked(4)) {
-            curFiles.addAll(chunk.map { lg -> async { lg to season(ctx, lg, cur, force, 6 * HOUR) } }.awaitAll())
-        }
+    private suspend fun clubs(ctx: Context, m: DetectedMatch, force: Boolean): BundleState = coroutineScope {
+        val fetchTimes = ArrayList<Long>()
+        val curFiles = loadAll(ctx, seasonLabel(0), force, 6 * HOUR)
         curFiles.forEach { it.second.first?.let { f -> fetchTimes.add(f.fetchedAt) } }
-        if (curFiles.all { it.second.first == null }) {
-            return@coroutineScope BundleState.Failed("Kulüp verisi indirilemedi. İnternet bağlantını kontrol et.\nAyrıntı: " + Http.lastError)
-        }
+        val anyCur = curFiles.any { it.second.first != null }
 
         var per = curFiles.map { it.first to it.second.second }
         var hHit = findTeam(m.home, per)
         var aHit = findTeam(m.away, per)
 
+        var prevLoaded = false
         if (hHit == null || aHit == null) {
-            // sezon başında takım henüz oynamamış olabilir: önceki sezonu da tara
-            val prevFiles = leagues.map { lg -> async { lg to season(ctx, lg, seasonCode(1), force, 7 * 24 * HOUR) } }.awaitAll()
-            per = per.map { (lg, recs) ->
-                val p = prevFiles.first { it.first == lg }.second.second
-                lg to (recs + p)
-            }
+            // takım güncel sezon dosyasında yoksa önceki sezonu da tara
+            val prevFiles = loadAll(ctx, seasonLabel(1), force, 7 * 24 * HOUR)
+            prevFiles.forEach { it.second.first?.let { f -> fetchTimes.add(f.fetchedAt) } }
+            prevLoaded = prevFiles.any { it.second.first != null }
+            per = per.map { (lg, recs) -> lg to (recs + prevFiles.first { it.first == lg }.second.second) }
             if (hHit == null) hHit = findTeam(m.home, per)
             if (aHit == null) aHit = findTeam(m.away, per)
+        }
+        if (!anyCur && !prevLoaded) {
+            return@coroutineScope BundleState.Failed(blockedHint("Kulüp verisi indirilemedi.", Http.lastError))
         }
 
         val hh = hHit
         val aa = aHit
-
-        suspend fun leagueRecords(lg: League): List<MatchRecord> {
-            val c = curFiles.first { it.first == lg }.second.second
-            val p1 = season(ctx, lg, seasonCode(1), force, 7 * 24 * HOUR)
-            val p2 = season(ctx, lg, seasonCode(2), force, 7 * 24 * HOUR)
-            p1.first?.let { fetchTimes.add(it.fetchedAt) }
-            p2.first?.let { fetchTimes.add(it.fetchedAt) }
-            return (c + p1.second + p2.second).sortedByDescending { it.date }
-        }
-
         val notes = ArrayList<String>()
         val cache = HashMap<String, List<MatchRecord>>()
-        suspend fun recs(lg: League): List<MatchRecord> = cache.getOrPut(lg.code) { leagueRecords(lg) }
+
+        suspend fun recs(lg: League): List<MatchRecord> {
+            val hit = cache[lg.code]
+            if (hit != null) return hit
+            val c = curFiles.first { it.first == lg }.second.second
+            val p1 = season(ctx, lg, seasonLabel(1), force, 7 * 24 * HOUR)
+            val p2 = season(ctx, lg, seasonLabel(2), force, 7 * 24 * HOUR)
+            p1.first?.let { fetchTimes.add(it.fetchedAt) }
+            p2.first?.let { fetchTimes.add(it.fetchedAt) }
+            val all = (c + p1.second + p2.second).sortedByDescending { it.date }
+            cache[lg.code] = all
+            fun mark(ok: Boolean) = if (ok) "var" else "yok"
+            notes.add(
+                "${lg.name} dosyaları: ${seasonLabel(0)} ${mark(c.isNotEmpty())}, " +
+                    "${seasonLabel(1)} ${mark(p1.second.isNotEmpty())}, ${seasonLabel(2)} ${mark(p2.second.isNotEmpty())}. " +
+                    "En yeni maç: " + (all.firstOrNull()?.date?.toString() ?: "-")
+            )
+            return all
+        }
 
         var homeSide = SideData(m.home, null, "", emptyList())
         var awaySide = SideData(m.away, null, "", emptyList())
@@ -167,12 +217,12 @@ object DataEngine {
             val r = recs(hh.league)
             homeSide = SideData(m.home, hh.team, hh.league.name,
                 r.filter { it.home == hh.team || it.away == hh.team }.take(10))
-        } else notes.add("Ev sahibi takım desteklenen liglerde bulunamadı: ${m.home}")
+        } else notes.add("Ev sahibi takım kaynaktaki liglerde bulunamadı: ${m.home}")
         if (aa != null) {
             val r = recs(aa.league)
             awaySide = SideData(m.away, aa.team, aa.league.name,
                 r.filter { it.home == aa.team || it.away == aa.team }.take(10))
-        } else notes.add("Deplasman takımı desteklenen liglerde bulunamadı: ${m.away}")
+        } else notes.add("Deplasman takımı kaynaktaki liglerde bulunamadı: ${m.away}")
 
         var h2h: List<MatchRecord> = emptyList()
         if (hh != null && aa != null) {
@@ -185,7 +235,8 @@ object DataEngine {
                 notes.add("Takımlar farklı liglerde. Kaynak kupa ve ligler arası maçları içermediği için ikili rekabet verisi yok.")
             }
         }
-        notes.add("Son maçlar yalnızca bu kaynağın kapsadığı lig maçlarından gelir. Kupa ve Avrupa maçları dahil değil.")
+        notes.add("Son maçlar yalnızca bu kaynağın kapsadığı lig maçlarıdır. Kupa ve Avrupa maçları dahil değil.")
+        notes.add("Bu kaynakta korner, şut, kart ve hakem verisi yok.")
 
         val latest = (homeSide.last + awaySide.last).maxOfOrNull { it.date }
         if (latest != null && ChronoUnit.DAYS.between(latest, LocalDate.now()) > 14) {
@@ -198,9 +249,9 @@ object DataEngine {
                 home = homeSide, away = awaySide, h2h = h2h,
                 sources = listOf(
                     SourceInfo(
-                        "football-data.co.uk",
+                        "openfootball/football.json ve openfootball/europe (GitHub)",
                         fetchTimes.maxOrNull() ?: System.currentTimeMillis(), latest,
-                        "Açık veri, uzun süredir yayında. Maç sonuçları genelde 1-2 gün içinde işlenir. Korner, şut ve kart verisi bazı liglerde eksik olabilir."
+                        "Açık veri (CC0), gönüllüler bakımlı, güncel sezon günde bir güncellenir. Yalnızca lig maçları ve skorlar. Bazı liglerde güncel sezon dosyası geç gelebilir."
                     )
                 ),
                 notes = notes

@@ -15,8 +15,6 @@ object Http {
     private const val UA =
         "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"
 
-    private fun isFd(u: String) = try { URL(u).host.endsWith("football-data.co.uk") } catch (e: Exception) { false }
-
     fun get(ctx: Context, url: String, maxAgeMs: Long, force: Boolean = false): Fetched? {
         val dir = File(ctx.filesDir, "cache")
         dir.mkdirs()
@@ -26,17 +24,10 @@ object Http {
             return Fetched(f.readText(), f.lastModified(), true)
         }
 
-        // football-data.co.uk sunucusunun HTTPS sertifika zinciri eksik olabiliyor (Android reddeder).
-        // Yalnızca bu alan adı için, herkese açık CSV dosyaları adına HTTP yedeği denenir.
-        val candidates = mutableListOf(url)
-        if (url.startsWith("https://") && isFd(url)) candidates.add("http://" + url.removePrefix("https://"))
-
-        for (cand in candidates) {
-            val t = download(cand)
-            if (t != null) {
-                f.writeText(t)
-                return Fetched(t, System.currentTimeMillis(), false)
-            }
+        val t = download(url)
+        if (t != null) {
+            f.writeText(t)
+            return Fetched(t, System.currentTimeMillis(), false)
         }
         if (f.exists()) return Fetched(f.readText(), f.lastModified(), true)
         return null
@@ -58,11 +49,7 @@ object Http {
                     val loc = c.getHeaderField("Location")
                     c.disconnect()
                     if (loc == null) { lastError = "HTTP $code, yönlendirme adresi yok"; return null }
-                    var next = URL(URL(u), loc).toString()
-                    if (start.startsWith("http://") && next.startsWith("https://") && isFd(next)) {
-                        next = "http://" + next.removePrefix("https://")
-                    }
-                    u = next
+                    u = URL(URL(u), loc).toString()
                     continue
                 }
                 if (code == 200) {

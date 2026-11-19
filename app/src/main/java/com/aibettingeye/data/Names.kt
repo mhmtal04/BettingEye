@@ -51,32 +51,42 @@ object Names {
         return 1.0 - lev(a, b).toDouble() / m
     }
 
-    /** Türkçe yazımdan football-data.co.uk yazımına bilinen karşılıklar (anahtarlar key() biçiminde). */
-    private val clubAlias = mapOf(
-        "bayern munih" to "bayern munich", "bayern munchen" to "bayern munich",
-        "kolonya" to "koln", "borussia monchengladbach" to "m gladbach", "monchengladbach" to "m gladbach",
-        "bayer leverkusen" to "leverkusen", "eintracht frankfurt" to "ein frankfurt",
-        "atletico madrid" to "ath madrid", "athletic bilbao" to "ath bilbao", "athletic club" to "ath bilbao",
-        "real sociedad" to "sociedad", "manchester united" to "man united", "manchester city" to "man city",
-        "newcastle united" to "newcastle", "tottenham hotspur" to "tottenham",
-        "nottingham forest" to "nott m forest", "wolverhampton" to "wolves", "wolverhampton wanderers" to "wolves",
-        "west ham united" to "west ham", "leicester city" to "leicester",
-        "psg" to "paris sg", "paris saint germain" to "paris sg", "marsilya" to "marseille",
-        "olympique lyon" to "lyon", "inter milan" to "inter", "internazionale" to "inter",
-        "sporting lizbon" to "sp lisbon", "sporting cp" to "sp lisbon", "braga" to "sp braga",
-        "psv" to "psv eindhoven", "istanbul basaksehir" to "buyuksehyr", "basaksehir" to "buyuksehyr",
-        "medipol basaksehir" to "buyuksehyr", "aek atina" to "aek"
+    /** Türkçe yazımdan kaynaktaki yazıma bilinen karşılıklar (anahtarlar key() biçiminde). */
+    private val clubAlias: Map<String, List<String>> = mapOf(
+        "bayern munih" to listOf("bayern munchen", "bayern munich"),
+        "kolonya" to listOf("koln"),
+        "borussia monchengladbach" to listOf("monchengladbach", "gladbach"),
+        "monchengladbach" to listOf("borussia monchengladbach"),
+        "atletico madrid" to listOf("atletico de madrid"),
+        "athletic bilbao" to listOf("athletic club"),
+        "inter" to listOf("internazionale"),
+        "inter milan" to listOf("internazionale"),
+        "psg" to listOf("paris saint germain"),
+        "marsilya" to listOf("marseille"),
+        "lyon" to listOf("lyonnais"),
+        "olympique lyon" to listOf("lyonnais"),
+        "sporting lizbon" to listOf("sporting cp"),
+        "sporting" to listOf("sporting cp"),
+        "psv" to listOf("psv eindhoven"),
+        "basaksehir" to listOf("istanbul basaksehir"),
+        "medipol basaksehir" to listOf("istanbul basaksehir"),
+        "aek atina" to listOf("aek athens"),
+        "wolverhampton" to listOf("wolverhampton wanderers"),
+        "newcastle" to listOf("newcastle united"),
+        "tottenham" to listOf("tottenham hotspur"),
+        "brighton" to listOf("brighton hove albion")
     )
 
     fun bestClub(input: String, candidates: Collection<String>): Pair<String, Double>? {
         val k0 = key(input)
-        val k = clubAlias[k0] ?: k0
-        if (k.isEmpty()) return null
+        if (k0.isEmpty()) return null
+        val ks = listOf(k0) + (clubAlias[k0] ?: emptyList())
         var best: String? = null
         var bs = 0.0
         var second = 0.0
         for (c in candidates) {
-            val s = similarity(k, key(c))
+            val kc = key(c)
+            val s = ks.maxOf { similarity(it, kc) }
             if (s > bs) { second = bs; bs = s; best = c } else if (s > second) second = s
         }
         if (best == null || bs < 0.82) return null
