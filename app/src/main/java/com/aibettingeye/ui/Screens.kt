@@ -491,7 +491,7 @@ private fun SettingsTab() {
     Heading("Ayarlar")
     Panel {
         Label("Sürüm")
-        Text("0.3.2, aşama 3: veri toplama", color = Palette.Text, fontSize = 14.sp)
+        Text("0.4.1, aşama 3: veri toplama (GitHub kaynakları)", color = Palette.Text, fontSize = 14.sp)
     }
     Panel {
         Label("Gözlemci tanılama")
